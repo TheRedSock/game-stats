@@ -25,6 +25,7 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/game_stats_test?schema=public
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/game_stats_test?schema=public
       TWITCH_APP_CLIENT_ID: test
       TWITCH_APP_CLIENT_SECRET: test
       ADMIN_PASSWORD: test-password

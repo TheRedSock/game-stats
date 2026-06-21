@@ -15,6 +15,8 @@ import { getReleaseYear, igdbTimestampToDate } from "@/lib/utils";
 
 const SYNC_CURSOR_KEY = "igdb_games_updated_at";
 const DEFAULT_BATCH = 100;
+/** Per-game upsert runs many relation writes; Neon + serverless needs more than Prisma's 5s default. */
+const GAME_UPSERT_TX = { maxWait: 10_000, timeout: 30_000 } as const;
 
 type SyncOptions = {
   batchSize?: number;
@@ -377,7 +379,7 @@ async function upsertSingleGame(client: IgdbClient, game: IgdbGame): Promise<boo
     }
 
     await upsertMetacriticScrapeTarget(tx, saved.id, metacriticEligible);
-  });
+  }, GAME_UPSERT_TX);
 
   return true;
 }
