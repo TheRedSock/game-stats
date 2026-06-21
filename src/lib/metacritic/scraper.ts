@@ -383,7 +383,7 @@ export async function scrapeMetacriticTarget(targetId: string): Promise<ScrapeSt
     target.manualUrl,
   );
 
-  if (resolution.status !== ScrapeStatus.SUCCESS) {
+  if (resolution.status !== ScrapeStatus.SUCCESS || !resolution.url) {
     batchLog(
       resolution.status === ScrapeStatus.AMBIGUOUS
         ? "Metacritic URL needs review"
