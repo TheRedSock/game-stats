@@ -1,0 +1,289 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CompanyRole {
+  DEVELOPER
+  PUBLISHER
+  PORTING
+  SUPPORTING
+}
+
+enum ScrapeProvider {
+  METACRITIC
+}
+
+enum ScrapeStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  AMBIGUOUS
+  SKIPPED
+}
+
+enum MetricKind {
+  CRITIC_SCORE
+  USER_SCORE
+  RATING
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum JobType {
+  IGDB_SYNC
+  METACRITIC_SCRAPE
+  METACRITIC_RESYNC
+  REPAIR
+  BACKFILL
+}
+
+model Game {
+  id           String   @id @default(cuid())
+  igdbId       Int      @unique
+  name         String
+  slug         String?
+  releaseDate  DateTime?
+  releaseYear  Int?
+  igdbStatus   Int?
+  igdbRating   Float?
+  igdbRatingCount Int?
+  syncedAt     DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  companies      GameCompany[]
+  genres         GameGenre[]
+  themes         GameTheme[]
+  platforms      GamePlatform[]
+  gameModes      GameGameMode[]
+  perspectives   GamePlayerPerspective[]
+  franchises     GameFranchise[]
+  metrics        GameMetric[]
+  scrapeTargets  ExternalScrapeTarget[]
+
+  @@index([releaseYear])
+  @@index([name])
+}
+
+model Company {
+  id     String @id @default(cuid())
+  igdbId Int    @unique
+  name   String
+  slug   String?
+
+  games GameCompany[]
+
+  @@index([name])
+}
+
+model GameCompany {
+  gameId    String
+  companyId String
+  role      CompanyRole
+
+  game    Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, companyId, role])
+  @@index([companyId])
+}
+
+model Genre {
+  id     String @id @default(cuid())
+  igdbId Int    @unique
+  name   String
+  slug   String?
+
+  games GameGenre[]
+}
+
+model GameGenre {
+  gameId  String
+  genreId String
+
+  game  Game  @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  genre Genre @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, genreId])
+  @@index([genreId])
+}
+
+model Theme {
+  id     String @id @default(cuid())
+  igdbId Int    @unique
+  name   String
+  slug   String?
+
+  games GameTheme[]
+}
+
+model GameTheme {
+  gameId  String
+  themeId String
+
+  game  Game  @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  theme Theme @relation(fields: [themeId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, themeId])
+  @@index([themeId])
+}
+
+model Platform {
+  id     String @id @default(cuid())
+  igdbId Int    @unique
+  name   String
+  slug   String?
+
+  games GamePlatform[]
+}
+
+model GamePlatform {
+  gameId     String
+  platformId String
+
+  game     Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  platform Platform @relation(fields: [platformId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, platformId])
+  @@index([platformId])
+}
+
+model GameMode {
+  id     String @id @default(cuid())
+  igdbId Int    @unique
+  name   String
+  slug   String?
+
+  games GameGameMode[]
+}
+
+model GameGameMode {
+  gameId     String
+  gameModeId String
+
+  game     Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  gameMode GameMode @relation(fields: [gameModeId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, gameModeId])
+  @@index([gameModeId])
+}
+
+model PlayerPerspective {
+  id     String @id @default(cuid())
+  igdbId Int    @unique
+  name   String
+  slug   String?
+
+  games GamePlayerPerspective[]
+}
+
+model GamePlayerPerspective {
+  gameId              String
+  playerPerspectiveId String
+
+  game              Game              @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  playerPerspective PlayerPerspective @relation(fields: [playerPerspectiveId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, playerPerspectiveId])
+  @@index([playerPerspectiveId])
+}
+
+model Franchise {
+  id     String @id @default(cuid())
+  igdbId Int    @unique
+  name   String
+  slug   String?
+
+  games GameFranchise[]
+}
+
+model GameFranchise {
+  gameId      String
+  franchiseId String
+
+  game      Game      @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  franchise Franchise @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, franchiseId])
+  @@index([franchiseId])
+}
+
+model MetricSource {
+  id          String     @id @default(cuid())
+  key         String     @unique
+  name        String
+  metricKind  MetricKind
+  maxValue    Float      @default(100)
+  description String?
+
+  metrics GameMetric[]
+}
+
+model GameMetric {
+  id         String   @id @default(cuid())
+  gameId     String
+  sourceId   String
+  value      Float
+  sampleSize Int?
+  fetchedAt  DateTime @default(now())
+  metadata   Json?
+
+  game   Game         @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  source MetricSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, sourceId])
+  @@index([sourceId])
+  @@index([value])
+}
+
+model ExternalScrapeTarget {
+  id            String         @id @default(cuid())
+  gameId        String
+  provider      ScrapeProvider
+  resolvedUrl   String?
+  manualUrl     String?
+  status        ScrapeStatus   @default(PENDING)
+  attemptCount  Int            @default(0)
+  lastAttemptAt DateTime?
+  lastSuccessAt DateTime?
+  lastError     String?
+  verifiedTitle String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, provider])
+  @@index([status])
+  @@index([provider])
+}
+
+model SyncState {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model JobRun {
+  id          String    @id @default(cuid())
+  type        JobType
+  status      JobStatus @default(PENDING)
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  message     String?
+  stats       Json?
+  error       String?
+
+  @@index([type, startedAt])
+}
