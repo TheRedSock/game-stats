@@ -13,6 +13,10 @@ function resolveDirectUrl(): string | undefined {
   return process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL_DIRECT;
 }
 
+function resolveRawProdDirectUrl(): string | undefined {
+  return process.env.DATABASE_URL_DIRECT ?? process.env.DIRECT_DATABASE_URL;
+}
+
 /** Raw URLs from .env — not affected by USE_LOCAL_DB. Used by db sync scripts. */
 export function getRawDatabaseUrls(): {
   local: string;
@@ -21,7 +25,7 @@ export function getRawDatabaseUrls(): {
 } {
   const local = process.env.DATABASE_LOCAL;
   const prodPooled = process.env.DATABASE_URL;
-  const prodDirect = resolveDirectUrl() ?? prodPooled;
+  const prodDirect = resolveRawProdDirectUrl() ?? prodPooled;
 
   if (!local) {
     throw new Error("DATABASE_LOCAL is required for database sync scripts.");
