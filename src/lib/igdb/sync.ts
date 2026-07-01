@@ -24,14 +24,21 @@ type SyncOptions = {
   startOffset?: number;
   fullResync?: boolean;
   updateSyncState?: boolean;
+  cursor?: IgdbSyncCursor | null;
 };
 
-type SyncStats = {
+export type SyncStats = {
   processed: number;
   upserted: number;
   skipped: number;
   errors: number;
   nextOffset: number;
+  nextCursor: IgdbSyncCursor | null;
+};
+
+export type IgdbSyncCursor = {
+  updatedAt: number;
+  igdbId: number;
 };
 
 async function upsertEntity(
@@ -80,7 +87,7 @@ function uniqueNumbers(ids: number[]): number[] {
   return [...new Set(ids)];
 }
 
-function rolesForInvolvedCompany(
+export function rolesForInvolvedCompany(
   involved: NonNullable<IgdbGame["involved_companies"]>[number],
 ): CompanyRole[] {
   const roles: CompanyRole[] = [];
@@ -90,6 +97,72 @@ function rolesForInvolvedCompany(
   if (involved.supporting) roles.push(CompanyRole.SUPPORTING);
   if (roles.length === 0) roles.push(CompanyRole.SUPPORTING);
   return roles;
+}
+
+function compareSyncCursor(a: IgdbSyncCursor | null, b: IgdbSyncCursor): number {
+  if (!a) return -1;
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
+  return a.igdbId - b.igdbId;
+}
+
+function encodeSyncCursor(cursor: IgdbSyncCursor): string {
+  return JSON.stringify(cursor);
+}
+
+function decodeSyncCursor(value: string | null | undefined): IgdbSyncCursor | null {
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value) as Partial<IgdbSyncCursor>;
+    const updatedAt = parsed.updatedAt;
+    const igdbId = parsed.igdbId;
+    if (
+      Number.isInteger(updatedAt) &&
+      Number.isInteger(igdbId) &&
+      updatedAt != null &&
+      igdbId != null &&
+      updatedAt > 0 &&
+      igdbId > 0
+    ) {
+      return { updatedAt, igdbId };
+    }
+  } catch {
+    // Fall through to legacy cursor formats below.
+  }
+
+  const asNumber = Number(value);
+  if (Number.isInteger(asNumber) && asNumber > 0) {
+    return { updatedAt: asNumber, igdbId: 0 };
+  }
+
+  const asDate = Date.parse(value);
+  if (Number.isFinite(asDate)) {
+    return { updatedAt: Math.floor(asDate / 1000), igdbId: 0 };
+  }
+
+  return null;
+}
+
+export async function getIgdbSyncCursor(): Promise<IgdbSyncCursor | null> {
+  const row = await prisma.syncState.findUnique({
+    where: { key: SYNC_CURSOR_KEY },
+    select: { value: true },
+  });
+  return decodeSyncCursor(row?.value);
+}
+
+export async function setIgdbSyncCursor(cursor: IgdbSyncCursor): Promise<void> {
+  await prisma.syncState.upsert({
+    where: { key: SYNC_CURSOR_KEY },
+    create: { key: SYNC_CURSOR_KEY, value: encodeSyncCursor(cursor) },
+    update: { value: encodeSyncCursor(cursor) },
+  });
+}
+
+function buildIncrementalWhere(cursor: IgdbSyncCursor | null): string {
+  const base = "rating != null & rating_count > 0";
+  if (!cursor) return base;
+  return `${base} & (updated_at > ${cursor.updatedAt} | (updated_at = ${cursor.updatedAt} & id > ${cursor.igdbId}))`;
 }
 
 async function ensureMetricSources(): Promise<void> {
@@ -336,9 +409,11 @@ async function upsertSingleGame(client: IgdbClient, game: IgdbGame): Promise<boo
         igdbId: game.id,
         name: game.name,
         slug: game.slug ?? null,
+        coverImageId: game.cover?.image_id ?? null,
         releaseDate,
         releaseYear,
         igdbStatus: game.status ?? null,
+        igdbUpdatedAt: game.updated_at ?? null,
         igdbRating: game.rating ?? null,
         igdbRatingCount: game.rating_count ?? null,
         syncedAt: new Date(),
@@ -346,9 +421,11 @@ async function upsertSingleGame(client: IgdbClient, game: IgdbGame): Promise<boo
       update: {
         name: game.name,
         slug: game.slug ?? null,
+        coverImageId: game.cover?.image_id ?? null,
         releaseDate,
         releaseYear,
         igdbStatus: game.status ?? null,
+        igdbUpdatedAt: game.updated_at ?? null,
         igdbRating: game.rating ?? null,
         igdbRatingCount: game.rating_count ?? null,
         syncedAt: new Date(),
@@ -389,26 +466,38 @@ export async function syncIgdbGames(options: SyncOptions = {}): Promise<SyncStat
   await ensureMetricSources();
 
   const batchSize = options.batchSize ?? Number(process.env.IGDB_SYNC_BATCH_SIZE ?? DEFAULT_BATCH);
-  const stats: SyncStats = { processed: 0, upserted: 0, skipped: 0, errors: 0, nextOffset: 0 };
+  const stats: SyncStats = {
+    processed: 0,
+    upserted: 0,
+    skipped: 0,
+    errors: 0,
+    nextOffset: 0,
+    nextCursor: null,
+  };
 
   let offset = options.startOffset ?? 0;
   const maxGames = options.maxGames ?? Infinity;
+  const incremental = options.fullResync !== true;
+  const initialCursor =
+    incremental && options.cursor !== undefined ? options.cursor : incremental ? await getIgdbSyncCursor() : null;
+  let latestCursor = initialCursor;
 
   batchLog("IGDB sync started", {
     batchSize,
     startOffset: offset,
+    cursor: initialCursor,
+    fullResync: options.fullResync ?? false,
     maxGames: Number.isFinite(maxGames) ? maxGames : "all",
   });
 
   while (stats.processed < maxGames) {
     const limit = Math.min(batchSize, maxGames - stats.processed);
-    const where = options.fullResync
-      ? "rating != null & rating_count > 0"
-      : "rating != null & rating_count > 0";
+    const where = incremental ? buildIncrementalWhere(initialCursor) : "rating != null & rating_count > 0";
+    const sort = incremental ? "updated_at asc, id asc" : "id asc";
 
     const games = await client.query<IgdbGame>(
       "games",
-      `fields ${IGDB_GAME_FIELDS}; where ${where}; sort id asc; limit ${limit}; offset ${offset};`,
+      `fields ${IGDB_GAME_FIELDS}; where ${where}; sort ${sort}; limit ${limit}; offset ${offset};`,
     );
 
     if (games.length === 0) break;
@@ -421,9 +510,16 @@ export async function syncIgdbGames(options: SyncOptions = {}): Promise<SyncStat
         const ok = await upsertSingleGame(client, game);
         if (ok) {
           stats.upserted += 1;
+          if (incremental && game.updated_at != null) {
+            const nextCursor = { updatedAt: game.updated_at, igdbId: game.id };
+            if (compareSyncCursor(latestCursor, nextCursor) < 0) {
+              latestCursor = nextCursor;
+            }
+          }
           batchLog("IGDB upserted", {
             igdbId: game.id,
             name: game.name,
+            updatedAt: game.updated_at,
             releaseYear: getReleaseYear(igdbTimestampToDate(game.first_release_date)),
             genres: game.genres?.length ?? 0,
             companies: game.involved_companies?.length ?? 0,
@@ -456,15 +552,12 @@ export async function syncIgdbGames(options: SyncOptions = {}): Promise<SyncStat
   }
 
   stats.nextOffset = offset;
+  stats.nextCursor = latestCursor;
 
   batchLog("IGDB sync finished", { ...stats });
 
-  if (options.updateSyncState !== false) {
-    await prisma.syncState.upsert({
-      where: { key: SYNC_CURSOR_KEY },
-      create: { key: SYNC_CURSOR_KEY, value: new Date().toISOString() },
-      update: { value: new Date().toISOString() },
-    });
+  if (options.updateSyncState !== false && incremental && latestCursor) {
+    await setIgdbSyncCursor(latestCursor);
   }
 
   return stats;

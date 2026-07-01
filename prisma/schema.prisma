@@ -41,11 +41,11 @@ enum JobStatus {
 }
 
 enum JobType {
+  IGDB_SEED
   IGDB_SYNC
   METACRITIC_SCRAPE
   METACRITIC_RESYNC
   REPAIR
-  BACKFILL
 }
 
 model Game {
@@ -53,9 +53,11 @@ model Game {
   igdbId       Int      @unique
   name         String
   slug         String?
+  coverImageId String?
   releaseDate  DateTime?
   releaseYear  Int?
   igdbStatus   Int?
+  igdbUpdatedAt Int?
   igdbRating   Float?
   igdbRatingCount Int?
   syncedAt     DateTime @default(now())
@@ -73,6 +75,7 @@ model Game {
   scrapeTargets  ExternalScrapeTarget[]
 
   @@index([releaseYear])
+  @@index([igdbUpdatedAt, igdbId])
   @@index([name])
 }
 

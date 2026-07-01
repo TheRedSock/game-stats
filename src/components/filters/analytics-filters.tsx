@@ -1,7 +1,9 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback } from "react";
+import { useCallback, useMemo, useTransition } from "react";
+import { Card } from "@/components/ui/card";
+import { Field, Select } from "@/components/ui/field";
 import type { GroupByDimension } from "@/lib/metrics/aggregation";
 import { DEFAULT_METRIC_PARAM } from "@/lib/metrics/filters";
 
@@ -27,52 +29,60 @@ const GROUP_OPTIONS: Array<{ value: GroupByDimension; label: string }> = [
   { value: "releaseYear", label: "Release year" },
 ];
 
-const METRIC_MODES = [
+const BASE_METRIC_MODES = [
   { value: "all_critic", label: "Avg all critic scores" },
   { value: "all_user", label: "Avg all user scores" },
-  { value: "source:metacritic_critic", label: "Metacritic critic only" },
-  { value: "source:metacritic_user", label: "Metacritic user only" },
-  { value: "source:igdb_user", label: "IGDB user only" },
 ];
 
 export function AnalyticsFilters({ options, defaultMetric = DEFAULT_METRIC_PARAM }: AnalyticsFiltersProps) {
   const router = useRouter();
   const params = useSearchParams();
+  const [isPending, startTransition] = useTransition();
+
+  const metricModes = useMemo(
+    () => [
+      ...BASE_METRIC_MODES,
+      ...options.sources.map((source) => ({
+        value: `source:${source.key}`,
+        label: `${source.name} only`,
+      })),
+    ],
+    [options.sources],
+  );
 
   const update = useCallback(
     (key: string, value: string) => {
       const next = new URLSearchParams(params.toString());
       if (value) next.set(key, value);
       else next.delete(key);
-      router.push(`?${next.toString()}`);
+      startTransition(() => {
+        router.push(`?${next.toString()}`);
+      });
     },
-    [params, router],
+    [params, router, startTransition],
   );
 
-  const selectClass =
-    "w-full rounded-xl border border-card-border bg-card/80 px-3 py-2 text-sm text-foreground outline-none focus:border-accent";
-
   return (
-    <div className="grid gap-4 rounded-2xl border border-card-border bg-card/50 p-4 md:grid-cols-2 lg:grid-cols-4">
-      <label className="space-y-1 text-sm">
-        <span className="text-muted">Metric</span>
-        <select
-          className={selectClass}
+    <Card
+      className="grid gap-4 md:grid-cols-2 lg:grid-cols-4"
+      aria-busy={isPending}
+      aria-live="polite"
+    >
+      <Field label="Metric">
+        <Select
           value={params.get("metric") ?? defaultMetric}
           onChange={(e) => update("metric", e.target.value)}
         >
-          {METRIC_MODES.map((mode) => (
+          {metricModes.map((mode) => (
             <option key={mode.value} value={mode.value}>
               {mode.label}
             </option>
           ))}
-        </select>
-      </label>
+        </Select>
+      </Field>
 
-      <label className="space-y-1 text-sm">
-        <span className="text-muted">Group by</span>
-        <select
-          className={selectClass}
+      <Field label="Group by">
+        <Select
           value={params.get("groupBy") ?? "genre"}
           onChange={(e) => update("groupBy", e.target.value)}
         >
@@ -81,13 +91,11 @@ export function AnalyticsFilters({ options, defaultMetric = DEFAULT_METRIC_PARAM
               {opt.label}
             </option>
           ))}
-        </select>
-      </label>
+        </Select>
+      </Field>
 
-      <label className="space-y-1 text-sm">
-        <span className="text-muted">Year from</span>
-        <select
-          className={selectClass}
+      <Field label="Year from">
+        <Select
           value={params.get("yearFrom") ?? ""}
           onChange={(e) => update("yearFrom", e.target.value)}
         >
@@ -97,13 +105,11 @@ export function AnalyticsFilters({ options, defaultMetric = DEFAULT_METRIC_PARAM
               {year}
             </option>
           ))}
-        </select>
-      </label>
+        </Select>
+      </Field>
 
-      <label className="space-y-1 text-sm">
-        <span className="text-muted">Year to</span>
-        <select
-          className={selectClass}
+      <Field label="Year to">
+        <Select
           value={params.get("yearTo") ?? ""}
           onChange={(e) => update("yearTo", e.target.value)}
         >
@@ -113,13 +119,11 @@ export function AnalyticsFilters({ options, defaultMetric = DEFAULT_METRIC_PARAM
               {year}
             </option>
           ))}
-        </select>
-      </label>
+        </Select>
+      </Field>
 
-      <label className="space-y-1 text-sm md:col-span-2">
-        <span className="text-muted">Genre filter</span>
-        <select
-          className={selectClass}
+      <Field label="Genre filter" className="md:col-span-2">
+        <Select
           value={params.get("genreId") ?? ""}
           onChange={(e) => update("genreId", e.target.value)}
         >
@@ -129,13 +133,11 @@ export function AnalyticsFilters({ options, defaultMetric = DEFAULT_METRIC_PARAM
               {genre.name}
             </option>
           ))}
-        </select>
-      </label>
+        </Select>
+      </Field>
 
-      <label className="space-y-1 text-sm md:col-span-2">
-        <span className="text-muted">Platform filter</span>
-        <select
-          className={selectClass}
+      <Field label="Platform filter" className="md:col-span-2">
+        <Select
           value={params.get("platformId") ?? ""}
           onChange={(e) => update("platformId", e.target.value)}
         >
@@ -145,8 +147,9 @@ export function AnalyticsFilters({ options, defaultMetric = DEFAULT_METRIC_PARAM
               {platform.name}
             </option>
           ))}
-        </select>
-      </label>
-    </div>
+        </Select>
+      </Field>
+      {isPending ? <p className="text-xs text-muted lg:col-span-4">Updating charts...</p> : null}
+    </Card>
   );
 }

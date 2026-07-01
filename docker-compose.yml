@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: game-stats-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: game_stats
+    ports:
+      - "5432:5432"
+    volumes:
+      - game-stats-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d game_stats"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  game-stats-pgdata:

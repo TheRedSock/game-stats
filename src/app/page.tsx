@@ -1,9 +1,12 @@
+import { Suspense } from "react";
 import {
   CorrelationScatter,
   DistributionChart,
   GroupComparisonChart,
   TrendChart,
 } from "@/components/charts/analytics-charts";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/ui/stat-card";
 import {
   getCriticVsUserCorrelation,
@@ -20,21 +23,6 @@ export const dynamic = "force-dynamic";
 export default async function HomePage() {
   const overview = await getOverviewStats();
   const { filter: defaultMetric } = await resolveMetricParam(undefined);
-  const distribution = await getScoreDistribution({
-    metric: defaultMetric,
-    groupBy: "genre",
-  });
-  const trend = await getReleaseYearTrend({
-    metric: defaultMetric,
-    groupBy: "releaseYear",
-    yearFrom: 2000,
-  });
-  const topGenres = await getGroupedMetrics({
-    metric: defaultMetric,
-    groupBy: "genre",
-    limit: 10,
-  });
-  const correlation = await getCriticVsUserCorrelation(300);
 
   const avgCritic =
     overview.sourceAverages.find((s) => s.source.includes("critic"))?.average ?? 0;
@@ -69,39 +57,31 @@ export default async function HomePage() {
 
       <section className="grid gap-6 lg:grid-cols-2">
         <Panel title="Score distribution" subtitle="All critic scores">
-          {distribution.length > 0 ? (
-            <DistributionChart data={distribution} />
-          ) : (
-            <EmptyState message="Run IGDB sync from admin to populate data." />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <DistributionPanel metric={defaultMetric} />
+          </Suspense>
         </Panel>
         <Panel title="Release year trend" subtitle="Average critic score by year since 2000">
-          {trend.length > 0 ? (
-            <TrendChart data={trend} />
-          ) : (
-            <EmptyState message="Not enough release year data yet." />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <TrendPanel metric={defaultMetric} />
+          </Suspense>
         </Panel>
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
         <Panel title="Top genres by critic score" subtitle="Minimum 3 titles per genre">
-          {topGenres.length > 0 ? (
-            <GroupComparisonChart data={topGenres} />
-          ) : (
-            <EmptyState message="Sync games to compare genres." />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <TopGenresPanel metric={defaultMetric} />
+          </Suspense>
         </Panel>
         <Panel title="Critic vs user correlation" subtitle="Normalized to 0–100 scale">
-          {correlation.length > 0 ? (
-            <CorrelationScatter data={correlation} />
-          ) : (
-            <EmptyState message="Scrape Metacritic scores to compare critic vs user." />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <CorrelationPanel />
+          </Suspense>
         </Panel>
       </section>
 
-      <section className="rounded-2xl border border-card-border bg-card/40 p-5">
+      <Card>
         <h2 className="text-lg font-medium">Source averages</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           {overview.sourceAverages.map((source) => (
@@ -112,7 +92,7 @@ export default async function HomePage() {
             </div>
           ))}
         </div>
-      </section>
+      </Card>
     </div>
   );
 }
@@ -127,20 +107,56 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-card-border bg-card/50 p-5">
-      <div className="mb-4">
-        <h2 className="text-lg font-medium">{title}</h2>
-        <p className="text-sm text-muted">{subtitle}</p>
-      </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{subtitle}</CardDescription>
+      </CardHeader>
       {children}
-    </div>
+    </Card>
   );
 }
 
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="flex h-[280px] items-center justify-center rounded-xl border border-dashed border-card-border text-sm text-muted">
-      {message}
-    </div>
+function ChartSkeleton() {
+  return <div className="h-[280px] animate-pulse rounded-xl bg-background/70" />;
+}
+
+async function DistributionPanel({ metric }: { metric: Awaited<ReturnType<typeof resolveMetricParam>>["filter"] }) {
+  const distribution = await getScoreDistribution({ metric, groupBy: "genre" });
+  return distribution.length > 0 ? (
+    <DistributionChart data={distribution} description="Score bucket distribution." />
+  ) : (
+    <EmptyState message="Run IGDB sync from admin to populate data." />
+  );
+}
+
+async function TrendPanel({ metric }: { metric: Awaited<ReturnType<typeof resolveMetricParam>>["filter"] }) {
+  const trend = await getReleaseYearTrend({
+    metric,
+    groupBy: "releaseYear",
+    yearFrom: 2000,
+  });
+  return trend.length > 0 ? (
+    <TrendChart data={trend} description="Average score by release year since 2000." />
+  ) : (
+    <EmptyState message="Not enough release year data yet." />
+  );
+}
+
+async function TopGenresPanel({ metric }: { metric: Awaited<ReturnType<typeof resolveMetricParam>>["filter"] }) {
+  const topGenres = await getGroupedMetrics({ metric, groupBy: "genre", limit: 10 });
+  return topGenres.length > 0 ? (
+    <GroupComparisonChart data={topGenres} description="Top genres by average score." />
+  ) : (
+    <EmptyState message="Sync games to compare genres." />
+  );
+}
+
+async function CorrelationPanel() {
+  const correlation = await getCriticVsUserCorrelation(300);
+  return correlation.length > 0 ? (
+    <CorrelationScatter data={correlation} description="Critic and user score scatter plot." />
+  ) : (
+    <EmptyState message="Scrape Metacritic scores to compare critic vs user." />
   );
 }

@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth/admin";
-import { completeJob, failJob, startJob } from "@/lib/jobs/runner";
-import { runMetacriticScrapeBatch } from "@/lib/metacritic/scraper";
-
-export const maxDuration = 300;
+import { dispatchAdminJob } from "@/lib/jobs/dispatch";
+import { JobAlreadyActiveError } from "@/lib/jobs/control";
 
 export async function POST() {
   try {
@@ -12,14 +10,14 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const job = await startJob("METACRITIC_SCRAPE");
   try {
-    const stats = await runMetacriticScrapeBatch({ retryFailed: true });
-    await completeJob(job.id, stats, `Retried ${stats.processed}, success ${stats.success}`);
-    return NextResponse.json({ ok: true, stats });
+    const job = await dispatchAdminJob("METACRITIC_SCRAPE", "admin/job.metacritic-retry", {
+      continuous: true,
+    });
+    return NextResponse.json({ ok: true, jobId: job.id, status: "queued" });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Retry failed";
-    await failJob(job.id, message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Failed to queue job";
+    const status = error instanceof JobAlreadyActiveError ? 409 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

@@ -1,4 +1,7 @@
+import { resolveDatabaseEnv } from "@/lib/env/database";
 import { PrismaClient } from "@prisma/client";
+
+resolveDatabaseEnv();
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;

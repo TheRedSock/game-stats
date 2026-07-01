@@ -1,6 +1,9 @@
 #!/usr/bin/env tsx
 import "dotenv/config";
+import { resolveDatabaseEnv } from "@/lib/env/database";
 import { syncIgdbGames, seedInitialGames } from "@/lib/igdb/sync";
+
+resolveDatabaseEnv();
 
 async function main() {
   const mode = process.argv[2] ?? "seed";

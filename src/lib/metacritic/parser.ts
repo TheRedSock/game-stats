@@ -1,3 +1,4 @@
+import { load, type CheerioAPI } from "cheerio";
 import { slugify } from "@/lib/utils";
 
 export type MetacriticCandidate = {
@@ -131,41 +132,44 @@ export function pickMetacriticSearchResult(
 
 export function parseSearchResultLinks(html: string): MetacriticCandidate[] {
   const results: MetacriticCandidate[] = [];
-  const linkRegex = /href="(\/game\/[^"]+)"/gi;
-  const titleRegex = /<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/span>/gi;
+  const $ = load(html);
+  const seen = new Set<string>();
 
-  const links = [...html.matchAll(linkRegex)].map((m) => m[1]);
-  const titles = [...html.matchAll(titleRegex)].map((m) => m[1].trim());
+  $('a[href*="/game/"]').each((_, element) => {
+    const link = $(element).attr("href");
+    if (!link?.includes("/game/")) return;
+    const url = link.startsWith("http")
+      ? link
+      : `${METACRITIC_BASE}${link.startsWith("/") ? link : `/${link}`}`;
+    const canonicalUrl = url.endsWith("/") ? url : `${url}/`;
+    if (seen.has(canonicalUrl)) return;
 
-  links.forEach((link, index) => {
-    if (!link.includes("/game/")) return;
+    const titleElement = $(element)
+      .find("[class]")
+      .filter((_, child) => ($(child).attr("class") ?? "").toLowerCase().includes("title"))
+      .first();
+    const title =
+      titleElement.text().trim() ||
+      $(element).attr("title")?.trim() ||
+      $(element).text().replace(/\s+/g, " ").trim();
+
+    seen.add(canonicalUrl);
     results.push({
-      url: `${METACRITIC_BASE}${link.endsWith("/") ? link : `${link}/`}`,
-      title: titles[index] ?? "",
+      url: canonicalUrl,
+      title,
     });
   });
 
   return results;
 }
 
-function decodeHtmlEntities(text: string): string {
-  return text
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
 export function extractPageTitle(html: string): string | null {
-  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  if (h1Match) {
-    return decodeHtmlEntities(h1Match[1].replace(/<[^>]+>/g, "").trim());
-  }
-  const ogMatch = html.match(/property="og:title"\s+content="([^"]+)"/i);
-  return ogMatch?.[1]?.replace(/\s+\|\s+Metacritic.*/i, "").trim() ?? null;
+  const $ = load(html);
+  const h1 = $("h1").first().text().replace(/\s+/g, " ").trim();
+  if (h1) return h1;
+
+  const ogTitle = $('meta[property="og:title"]').attr("content")?.trim();
+  return ogTitle?.replace(/\s+\|\s+Metacritic.*/i, "").trim() ?? null;
 }
 
 function parseCount(text: string | undefined): number | undefined {
@@ -181,18 +185,37 @@ function parseScore(text: string | undefined, max: number): number | undefined {
   return n;
 }
 
-function extractAggregateSection(html: string, headerPattern: RegExp): string {
-  const start = html.search(headerPattern);
-  if (start < 0) return "";
-  return html.slice(start, start + 1200);
+function sectionFromHeader($: CheerioAPI, label: "Metascore" | "User score"): string {
+  const header = $('[data-testid="global-score-header"]')
+    .filter((_, element) => $(element).text().trim().toLowerCase() === label.toLowerCase())
+    .first();
+
+  if (!header.length) return "";
+
+  const container =
+    header.closest("section, article, div").text().replace(/\s+/g, " ").trim() ||
+    header.parent().text().replace(/\s+/g, " ").trim();
+  return container;
 }
 
 function extractCriticAggregateSection(html: string): string {
-  return extractAggregateSection(html, /data-testid="global-score-header">Metascore/i);
+  const $ = load(html);
+  const section = sectionFromHeader($, "Metascore");
+  if (/Metascore|Critic Reviews?|global-score-value/i.test(section) && /Based on|title=|aria-label=/i.test(section)) {
+    return section;
+  }
+  const start = html.search(/Metascore/i);
+  return start >= 0 ? html.slice(start, start + 1200) : section;
 }
 
 function extractUserAggregateSection(html: string): string {
-  return extractAggregateSection(html, /data-testid="global-score-header">User score/i);
+  const $ = load(html);
+  const section = sectionFromHeader($, "User score");
+  if (/User score|User Ratings?|global-score-value/i.test(section) && /Based on|title=|aria-label=/i.test(section)) {
+    return section;
+  }
+  const start = html.search(/User score/i);
+  return start >= 0 ? html.slice(start, start + 1200) : section;
 }
 
 function aggregateShowsTbd(section: string, hasScore: boolean): boolean {
@@ -255,7 +278,10 @@ function parseAggregateUserScore(section: string): number | undefined {
 
 function parseJsonLdRatings(html: string): Partial<MetacriticParsedScores> {
   const result: Partial<MetacriticParsedScores> = {};
-  const blocks = [...html.matchAll(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)];
+  const $ = load(html);
+  const blocks = $('script[type="application/ld+json"]')
+    .map((_, element) => $(element).text())
+    .get();
 
   const visit = (node: unknown): void => {
     if (!node || typeof node !== "object") return;
@@ -296,7 +322,7 @@ function parseJsonLdRatings(html: string): Partial<MetacriticParsedScores> {
 
   for (const block of blocks) {
     try {
-      visit(JSON.parse(block[1]));
+      visit(JSON.parse(block));
     } catch {
       // ignore invalid JSON-LD
     }

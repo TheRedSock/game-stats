@@ -28,7 +28,8 @@ Game Stats is a Next.js analytics app with PostgreSQL (Prisma), IGDB ingestion, 
 - Match existing patterns: server components for data pages, client components only for interactivity
 - Prefer Prisma for DB access via `src/lib/db.ts` singleton
 - Keep ingestion logic in `src/lib/igdb/` and `src/lib/metacritic/`, not in route handlers
-- Avoid new paid/third-party SaaS (Inngest, Upstash, Arcjet, etc.)
+- Avoid new paid/third-party SaaS unless explicitly requested
+- Inngest runs admin batch jobs; Upstash Redis stores cancel flags when configured
 - Minimize scope — no drive-by refactors
 
 ## Testing expectations
@@ -54,10 +55,12 @@ Fix CI failures in the same PR when possible.
 ## Deployment considerations
 
 - Target: **Vercel** + **PostgreSQL** (Neon, Vercel Postgres, etc.)
-- `DATABASE_URL` required in all environments
+- `DATABASE_URL` required in all environments (Neon pooler in prod; local dev may use `USE_LOCAL_DB` + `DATABASE_LOCAL`)
+- `DIRECT_DATABASE_URL` or `DATABASE_URL_DIRECT` required for Neon (Prisma migrations, db sync)
 - `prisma generate` runs on `postinstall`
 - Run `prisma migrate deploy` for production schema updates
-- Admin jobs use `maxDuration = 300` — respect Vercel plan limits
+- Admin jobs enqueue Inngest events — do not run long sync loops in route handlers
+- Respect `JOB_MAX_BATCHES` and `JOB_MAX_TOTAL_ITEMS` when adding new orchestrated jobs
 - Tune `IGDB_SYNC_BATCH_SIZE` and `METACRITIC_SCRAPE_BATCH_SIZE` for serverless timeouts
 
 ## Data ingestion / sync behavior
@@ -103,6 +106,11 @@ pnpm db:migrate
 pnpm db:studio
 pnpm ingest:igdb
 pnpm ingest:metacritic
+pnpm db:up
+pnpm db:down
+pnpm db:sync:from-prod
+pnpm db:sync:to-prod
+pnpm inngest:dev
 ```
 
 ## When uncertain

@@ -3,6 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ClientOnly } from "@/components/ui/client-only";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/field";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -43,27 +46,29 @@ export default function AdminLoginPage() {
       >
         <form
           onSubmit={handleSubmit}
-          className="space-y-4 rounded-2xl border border-card-border bg-card/60 p-6"
+          className="space-y-4"
         >
-          <label className="block space-y-1 text-sm">
-            <span className="text-muted">Password</span>
-            <input
+          <Card>
+            <Field label="Password">
+              <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
-              className="w-full rounded-xl border border-card-border bg-background px-3 py-2 outline-none focus:border-accent"
+              aria-invalid={error ? "true" : "false"}
+              aria-describedby={error ? "admin-login-error" : undefined}
               required
-            />
-          </label>
-          {error ? <p className="text-sm text-red-400">{error}</p> : null}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-xl bg-accent px-4 py-2 font-medium text-white transition hover:bg-accent/90 disabled:opacity-60"
-          >
-            {loading ? "Signing in…" : "Sign in"}
-          </button>
+              />
+            </Field>
+            {error ? (
+              <p id="admin-login-error" className="mt-3 text-sm text-red-400" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <Button type="submit" disabled={loading} className="mt-4 w-full">
+              {loading ? "Signing in..." : "Sign in"}
+            </Button>
+          </Card>
         </form>
       </ClientOnly>
     </div>

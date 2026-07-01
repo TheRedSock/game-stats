@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth/admin";
-import { completeJob, failJob, startJob } from "@/lib/jobs/runner";
-import { syncIgdbGames } from "@/lib/igdb/sync";
-
-export const maxDuration = 300;
+import { dispatchAdminJob } from "@/lib/jobs/dispatch";
+import { JobAlreadyActiveError } from "@/lib/jobs/control";
 
 export async function POST() {
   try {
@@ -12,14 +10,14 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const job = await startJob("IGDB_SYNC");
   try {
-    const stats = await syncIgdbGames();
-    await completeJob(job.id, stats, `Synced ${stats.upserted} games`);
-    return NextResponse.json({ ok: true, stats });
+    const job = await dispatchAdminJob("IGDB_SYNC", "admin/job.igdb-sync", {
+      continuous: true,
+    });
+    return NextResponse.json({ ok: true, jobId: job.id, status: "queued" });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Sync failed";
-    await failJob(job.id, message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Failed to queue job";
+    const status = error instanceof JobAlreadyActiveError ? 409 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

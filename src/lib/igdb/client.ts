@@ -129,8 +129,12 @@ export type IgdbGame = {
   id: number;
   name: string;
   slug?: string;
+  cover?: {
+    image_id?: string;
+  };
   first_release_date?: number;
   status?: number;
+  updated_at?: number;
   rating?: number;
   rating_count?: number;
   genres?: number[];
@@ -158,8 +162,10 @@ export const IGDB_GAME_FIELDS = [
   "id",
   "name",
   "slug",
+  "cover.image_id",
   "first_release_date",
   "status",
+  "updated_at",
   "rating",
   "rating_count",
   "genres",

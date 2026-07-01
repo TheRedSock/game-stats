@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/admin";
-import { completeJob, failJob, startJob } from "@/lib/jobs/runner";
-import { syncIgdbGames } from "@/lib/igdb/sync";
-
-export const maxDuration = 300;
+import { dispatchAdminJob } from "@/lib/jobs/dispatch";
+import { JobAlreadyActiveError } from "@/lib/jobs/control";
+import { getIgdbSeedTotal } from "@/lib/jobs/limits";
 
 const bodySchema = z.object({
-  offset: z.number().int().min(0).optional(),
-  limit: z.number().int().min(1).max(200).optional(),
-  jobId: z.string().optional(),
-  finalize: z.boolean().optional(),
+  totalGames: z.number().int().min(1).max(5000).optional(),
 });
 
 export async function POST(request: Request) {
@@ -25,43 +21,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  const offset = parsed.data.offset ?? 0;
-  const limit = parsed.data.limit ?? 200;
-  const isChunked = parsed.data.limit != null || parsed.data.offset != null;
-
-  const job =
-    parsed.data.jobId != null
-      ? { id: parsed.data.jobId }
-      : await startJob("IGDB_SYNC");
-
   try {
-    const stats = await syncIgdbGames({
-      maxGames: limit,
-      startOffset: offset,
-      batchSize: Math.min(limit, 50),
-      updateSyncState: !isChunked || parsed.data.finalize === true,
+    const job = await dispatchAdminJob("IGDB_SEED", "admin/job.igdb-seed", {
+      totalGames: parsed.data.totalGames ?? getIgdbSeedTotal(),
     });
-
-    const done = stats.processed === 0 || stats.processed < limit;
-
-    if (!isChunked || parsed.data.finalize === true || done) {
-      await completeJob(
-        job.id,
-        stats,
-        `Seeded ${stats.upserted} games (${stats.processed} processed)`,
-      );
-    }
-
-    return NextResponse.json({
-      ok: true,
-      stats,
-      nextOffset: stats.nextOffset,
-      jobId: job.id,
-      done,
-    });
+    return NextResponse.json({ ok: true, jobId: job.id, status: "queued" });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Seed failed";
-    await failJob(job.id, message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Failed to queue job";
+    const status = error instanceof JobAlreadyActiveError ? 409 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

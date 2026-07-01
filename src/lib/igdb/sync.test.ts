@@ -1,18 +1,9 @@
 import { CompanyRole } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import type { IgdbGame } from "@/lib/igdb/client";
+import { rolesForInvolvedCompany } from "@/lib/igdb/sync";
 
 type Involved = NonNullable<IgdbGame["involved_companies"]>[number];
-
-function rolesForInvolvedCompany(involved: Involved): CompanyRole[] {
-  const roles: CompanyRole[] = [];
-  if (involved.developer) roles.push(CompanyRole.DEVELOPER);
-  if (involved.publisher) roles.push(CompanyRole.PUBLISHER);
-  if (involved.porting) roles.push(CompanyRole.PORTING);
-  if (involved.supporting) roles.push(CompanyRole.SUPPORTING);
-  if (roles.length === 0) roles.push(CompanyRole.SUPPORTING);
-  return roles;
-}
 
 function buildCompanyRows(
   involvedCompanies: Involved[],

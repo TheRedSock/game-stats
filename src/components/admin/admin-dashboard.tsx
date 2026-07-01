@@ -3,16 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ClientOnly } from "@/components/ui/client-only";
-
-type Job = {
-  id: string;
-  type: string;
-  status: string;
-  startedAtDisplay: string;
-  message: string | null;
-  error: string | null;
-  stats: unknown;
-};
+import { JobMonitor, type JobRow } from "@/components/admin/job-monitor";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/field";
 
 type ScrapeTarget = {
   id: string;
@@ -27,84 +22,37 @@ type ScrapeTarget = {
 };
 
 type AdminDashboardProps = {
-  jobs: Job[];
+  jobs: JobRow[];
   scrapeTargets: ScrapeTarget[];
   gameCount: number;
 };
 
 const SEED_JOB_LABEL = "Seed IGDB (200 games)";
-const SEED_TOTAL = 200;
-const SEED_CHUNK_SIZE = 10;
 
 export function AdminDashboard({ jobs, scrapeTargets, gameCount }: AdminDashboardProps) {
   const router = useRouter();
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState<string | null>(null);
-  const [seedProgress, setSeedProgress] = useState(0);
   const [manualUrls, setManualUrls] = useState<Record<string, string>>({});
 
-  async function runSeedJob() {
-    setLoading(SEED_JOB_LABEL);
-    setSeedProgress(0);
-    setMessage("");
-
-    let offset = 0;
-    let jobId: string | undefined;
-    let totalProcessed = 0;
-    let totalUpserted = 0;
-    let totalErrors = 0;
-
-    try {
-      while (totalProcessed < SEED_TOTAL) {
-        const limit = Math.min(SEED_CHUNK_SIZE, SEED_TOTAL - totalProcessed);
-        const finalize = totalProcessed + limit >= SEED_TOTAL;
-
-        const response = await fetch("/api/admin/jobs/igdb-seed", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ offset, limit, jobId, finalize }),
-        });
-
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Seed failed");
-
-        jobId = data.jobId;
-        totalProcessed += data.stats.processed;
-        totalUpserted += data.stats.upserted;
-        totalErrors += data.stats.errors;
-        setSeedProgress(Math.min(totalProcessed, SEED_TOTAL));
-
-        if (data.done || data.stats.processed === 0) break;
-        offset = data.nextOffset;
-      }
-
-      setMessage(
-        `${SEED_JOB_LABEL}: ${totalUpserted} upserted, ${totalErrors} errors (${totalProcessed} processed)`,
-      );
-      router.refresh();
-    } catch (error) {
-      setMessage(
-        `${SEED_JOB_LABEL} failed at ${totalProcessed}/${SEED_TOTAL}: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      );
-    } finally {
-      setLoading(null);
-      setSeedProgress(0);
-    }
-  }
-
-  async function runJob(endpoint: string, label: string) {
+  async function queueJob(endpoint: string, label: string, body?: object) {
     setLoading(label);
     setMessage("");
     try {
-      const response = await fetch(endpoint, { method: "POST" });
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Job failed");
-      setMessage(`${label}: ${JSON.stringify(data.stats ?? data.message ?? "done")}`);
-      router.refresh();
+      if (!response.ok) throw new Error(data.error ?? "Failed to queue job");
+      setMessage(
+        `${label} queued (job ${String(data.jobId).slice(0, 8)}…). Running in background via Inngest.`,
+      );
     } catch (error) {
-      setMessage(`${label} failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+      setMessage(
+        `${label} failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     } finally {
       setLoading(null);
     }
@@ -175,7 +123,11 @@ export function AdminDashboard({ jobs, scrapeTargets, gameCount }: AdminDashboar
   }
 
   const jobButtons = [
-    { label: SEED_JOB_LABEL, endpoint: "/api/admin/jobs/igdb-seed", isSeed: true },
+    {
+      label: SEED_JOB_LABEL,
+      endpoint: "/api/admin/jobs/igdb-seed",
+      body: {},
+    },
     { label: "IGDB sync batch", endpoint: "/api/admin/jobs/igdb-sync" },
     { label: "Metacritic scrape batch", endpoint: "/api/admin/jobs/metacritic-scrape" },
     { label: "Retry failed Metacritic", endpoint: "/api/admin/jobs/metacritic-retry" },
@@ -192,84 +144,69 @@ export function AdminDashboard({ jobs, scrapeTargets, gameCount }: AdminDashboar
         <div>
           <h1 className="text-3xl font-semibold">Admin</h1>
           <p className="text-sm text-muted">
-            {gameCount} games indexed · operational jobs only
+            {gameCount} games indexed · jobs run asynchronously via Inngest
           </p>
         </div>
-        <button
+        <Button
+          variant="secondary"
           onClick={logout}
-          className="rounded-xl border border-card-border px-4 py-2 text-sm transition hover:border-accent"
         >
           Sign out
-        </button>
+        </Button>
       </div>
 
       {message ? (
-        <div className="rounded-xl border border-accent/40 bg-accent-soft/30 px-4 py-3 text-sm">
+        <div
+          className="rounded-xl border border-accent/40 bg-accent-soft/30 px-4 py-3 text-sm"
+          role="status"
+          aria-live="polite"
+        >
           {message}
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-card-border bg-card/50 p-5">
-        <h2 className="mb-4 text-lg font-medium">Run jobs</h2>
+      <Card>
+        <CardHeader>
+          <CardTitle>Run jobs</CardTitle>
+        </CardHeader>
         <div className="flex flex-wrap gap-3">
           {jobButtons.map((job) => (
-            <button
+            <Button
               key={job.endpoint}
-              disabled={loading != null}
+              disabled={loading === job.label}
               onClick={() =>
-                "isSeed" in job && job.isSeed
-                  ? runSeedJob()
-                  : runJob(job.endpoint, job.label)
+                queueJob(
+                  job.endpoint,
+                  job.label,
+                  "body" in job ? job.body : undefined,
+                )
               }
-              className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent/90 disabled:opacity-50"
             >
-              {loading === job.label
-                ? job.label === SEED_JOB_LABEL
-                  ? `Running… ${seedProgress} / ${SEED_TOTAL}`
-                  : "Running…"
-                : job.label}
-            </button>
+              {loading === job.label ? "Queueing…" : job.label}
+            </Button>
           ))}
         </div>
         <p className="mt-3 text-xs text-muted">
-          Jobs run synchronously in this request. On Vercel, keep batch sizes modest via env vars.
+          Jobs queue immediately and run in the background. Limits: JOB_MAX_BATCHES and
+          JOB_MAX_TOTAL_ITEMS env vars cap runaway loops.
         </p>
-      </section>
+      </Card>
 
-      <section className="rounded-2xl border border-card-border bg-card/50 p-5">
-        <h2 className="mb-4 text-lg font-medium">Recent jobs</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-muted">
-              <tr>
-                <th className="pb-2 pr-4">Type</th>
-                <th className="pb-2 pr-4">Status</th>
-                <th className="pb-2 pr-4">Started</th>
-                <th className="pb-2">Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr key={job.id} className="border-t border-card-border/60">
-                  <td className="py-2 pr-4">{job.type}</td>
-                  <td className="py-2 pr-4">{job.status}</td>
-                  <td className="py-2 pr-4">{job.startedAtDisplay}</td>
-                  <td className="py-2 text-muted">
-                    {job.error ?? job.message ?? JSON.stringify(job.stats ?? "")}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent jobs</CardTitle>
+        </CardHeader>
+        <JobMonitor initialJobs={jobs} onQueueMessage={setMessage} />
+      </Card>
 
-      <section className="rounded-2xl border border-card-border bg-card/50 p-5">
-        <h2 className="mb-4 text-lg font-medium">Metacritic scrape targets</h2>
-        <p className="mb-4 text-sm text-muted">
-          Failed means no Metacritic page was found. Ambiguous means a page was found but the title
-          did not match — use Approve match to import scores from that page, or set a manual URL.
-        </p>
+      <Card>
+        <CardHeader>
+          <CardTitle>Metacritic scrape targets</CardTitle>
+          <CardDescription>
+            Failed means no Metacritic page was found. Ambiguous means a page was found but the
+            title did not match; approve the match or set a manual URL.
+          </CardDescription>
+        </CardHeader>
         <ClientOnly
           fallback={
             <div className="space-y-4">
@@ -291,80 +228,85 @@ export function AdminDashboard({ jobs, scrapeTargets, gameCount }: AdminDashboar
                 const isFailed = target.status === "FAILED";
 
                 return (
-                <div
-                  key={target.id}
-                  className="rounded-xl border border-card-border p-4 text-sm"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="font-medium">{target.gameName}</p>
-                      <p className="text-muted">
-                        {target.status} · {target.attemptCount} attempts
-                      </p>
-                      {target.lastError ? (
-                        <p
-                          className={`mt-1 text-xs ${isAmbiguous ? "text-amber-300" : isFailed ? "text-red-300" : "text-muted"}`}
+                  <div
+                    key={target.id}
+                    className="rounded-xl border border-card-border p-4 text-sm"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium">{target.gameName}</p>
+                        <p className="mt-1 flex flex-wrap items-center gap-2 text-muted">
+                          <Badge variant="status">{target.status}</Badge>
+                          <span>{target.attemptCount} attempts</span>
+                        </p>
+                        {target.lastError ? (
+                          <p
+                            className={`mt-1 text-xs ${isAmbiguous ? "text-amber-300" : isFailed ? "text-red-300" : "text-muted"}`}
+                          >
+                            {target.lastError}
+                          </p>
+                        ) : null}
+                        {target.verifiedTitle ? (
+                          <p className="mt-1 text-xs text-muted">
+                            Metacritic title: {target.verifiedTitle}
+                          </p>
+                        ) : null}
+                        {target.resolvedUrl ? (
+                          <p className="mt-1 text-xs text-muted">
+                            Resolved: {target.resolvedUrl}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {isAmbiguous && target.resolvedUrl ? (
+                        <Button
+                          size="sm"
+                          onClick={() => approveMatch(target.gameId)}
+                          disabled={loading != null}
                         >
-                          {target.lastError}
-                        </p>
+                          Approve match
+                        </Button>
                       ) : null}
-                      {target.verifiedTitle ? (
-                        <p className="mt-1 text-xs text-muted">
-                          Metacritic title: {target.verifiedTitle}
-                        </p>
-                      ) : null}
-                      {target.resolvedUrl ? (
-                        <p className="mt-1 text-xs text-muted">Resolved: {target.resolvedUrl}</p>
-                      ) : null}
+                      <Input
+                        type="text"
+                        placeholder="slug or https://www.metacritic.com/game/..."
+                        value={manualUrls[target.gameId] ?? target.manualUrl ?? ""}
+                        onChange={(e) =>
+                          setManualUrls((prev) => ({
+                            ...prev,
+                            [target.gameId]: e.target.value,
+                          }))
+                        }
+                        autoComplete="off"
+                        data-1p-ignore
+                        data-lpignore="true"
+                        className="min-w-[280px] flex-1 text-xs"
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => saveManualUrl(target.gameId)}
+                        disabled={loading != null}
+                      >
+                        Save URL
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => approveNoScores(target.gameId)}
+                        disabled={loading != null}
+                      >
+                        Approve no scores
+                      </Button>
                     </div>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {isAmbiguous && target.resolvedUrl ? (
-                      <button
-                        type="button"
-                        onClick={() => approveMatch(target.gameId)}
-                        disabled={loading != null}
-                        className="rounded-lg bg-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-accent/90"
-                      >
-                        Approve match
-                      </button>
-                    ) : null}
-                    <input
-                      type="text"
-                      placeholder="slug or https://www.metacritic.com/game/..."
-                      value={manualUrls[target.gameId] ?? target.manualUrl ?? ""}
-                      onChange={(e) =>
-                        setManualUrls((prev) => ({ ...prev, [target.gameId]: e.target.value }))
-                      }
-                      autoComplete="off"
-                      data-1p-ignore
-                      data-lpignore="true"
-                      className="min-w-[280px] flex-1 rounded-lg border border-card-border bg-background px-3 py-2 text-xs outline-none focus:border-accent"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => saveManualUrl(target.gameId)}
-                      disabled={loading != null}
-                      className="rounded-lg border border-card-border px-3 py-2 text-xs transition hover:border-accent"
-                    >
-                      Save URL
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => approveNoScores(target.gameId)}
-                      disabled={loading != null}
-                      className="rounded-lg border border-card-border px-3 py-2 text-xs text-muted transition hover:border-accent hover:text-foreground"
-                    >
-                      Approve no scores
-                    </button>
-                  </div>
-                </div>
-              );
+                );
               })
             )}
           </div>
         </ClientOnly>
-      </section>
+      </Card>
     </div>
   );
 }

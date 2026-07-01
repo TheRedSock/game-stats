@@ -1,11 +1,17 @@
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
 import { formatDateTime } from "@/lib/utils";
 import { isAdminAuthenticated } from "@/lib/auth/admin";
 import { AdminDashboard } from "@/components/admin/admin-dashboard";
-import { getRecentJobs } from "@/lib/jobs/runner";
+import { getRecentJobs } from "@/lib/jobs/control";
 import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Admin",
+  description: "Run ingestion, repair, and Metacritic enrichment jobs.",
+};
 
 export default async function AdminPage() {
   const authed = await isAdminAuthenticated();

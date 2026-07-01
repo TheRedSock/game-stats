@@ -63,27 +63,97 @@ function buildMetricWhere(metric: MetricFilter): Prisma.GameMetricWhereInput {
   }
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
+function metricPredicate(metric: MetricFilter): Prisma.Sql {
+  switch (metric.mode) {
+    case "source":
+      return Prisma.sql`ms."key" = ${metric.sourceKey}`;
+    case "kind":
+      return Prisma.sql`ms."metricKind"::text = ${metric.metricKind}`;
+    case "all_critic":
+      return Prisma.sql`ms."metricKind"::text = ${MetricKind.CRITIC_SCORE}`;
+    case "all_user":
+      return Prisma.sql`ms."metricKind"::text = ${MetricKind.USER_SCORE}`;
+  }
 }
 
-function aggregateValues(values: number[]): Omit<GroupMetricRow, "key" | "label"> {
-  if (values.length === 0) {
-    return { count: 0, average: 0, median: 0, min: 0, max: 0 };
+function gameFilterPredicate(filters: AnalyticsFilters): Prisma.Sql {
+  const yearFrom = filters.yearFrom ?? null;
+  const yearTo = filters.yearTo ?? null;
+  const genreFilter = filters.genreIds?.length
+    ? Prisma.sql`EXISTS (
+        SELECT 1 FROM "GameGenre" gg_filter
+        WHERE gg_filter."gameId" = g."id"
+          AND gg_filter."genreId" IN (${Prisma.join(filters.genreIds)})
+      )`
+    : Prisma.sql`TRUE`;
+  const platformFilter = filters.platformIds?.length
+    ? Prisma.sql`EXISTS (
+        SELECT 1 FROM "GamePlatform" gp_filter
+        WHERE gp_filter."gameId" = g."id"
+          AND gp_filter."platformId" IN (${Prisma.join(filters.platformIds)})
+      )`
+    : Prisma.sql`TRUE`;
+
+  return Prisma.sql`
+    (${yearFrom}::int IS NULL OR g."releaseYear" >= ${yearFrom}::int)
+    AND (${yearTo}::int IS NULL OR g."releaseYear" <= ${yearTo}::int)
+    AND ${genreFilter}
+    AND ${platformFilter}
+  `;
+}
+
+function groupedDimensionQuery(groupBy: GroupByDimension): Prisma.Sql {
+  switch (groupBy) {
+    case "releaseYear":
+      return Prisma.sql`
+        SELECT gs.score, g."releaseYear"::text AS key, g."releaseYear"::text AS label
+        FROM game_scores gs
+        JOIN "Game" g ON g."id" = gs."gameId"
+        WHERE g."releaseYear" IS NOT NULL
+      `;
+    case "genre":
+      return Prisma.sql`
+        SELECT gs.score, genre."id" AS key, genre."name" AS label
+        FROM game_scores gs
+        JOIN "GameGenre" gg ON gg."gameId" = gs."gameId"
+        JOIN "Genre" genre ON genre."id" = gg."genreId"
+      `;
+    case "platform":
+      return Prisma.sql`
+        SELECT gs.score, platform."id" AS key, platform."name" AS label
+        FROM game_scores gs
+        JOIN "GamePlatform" gp ON gp."gameId" = gs."gameId"
+        JOIN "Platform" platform ON platform."id" = gp."platformId"
+      `;
+    case "developer":
+      return Prisma.sql`
+        SELECT gs.score, company."id" AS key, company."name" AS label
+        FROM game_scores gs
+        JOIN "GameCompany" gc ON gc."gameId" = gs."gameId" AND gc."role"::text = 'DEVELOPER'
+        JOIN "Company" company ON company."id" = gc."companyId"
+      `;
+    case "publisher":
+      return Prisma.sql`
+        SELECT gs.score, company."id" AS key, company."name" AS label
+        FROM game_scores gs
+        JOIN "GameCompany" gc ON gc."gameId" = gs."gameId" AND gc."role"::text = 'PUBLISHER'
+        JOIN "Company" company ON company."id" = gc."companyId"
+      `;
+    case "franchise":
+      return Prisma.sql`
+        SELECT gs.score, franchise."id" AS key, franchise."name" AS label
+        FROM game_scores gs
+        JOIN "GameFranchise" gf ON gf."gameId" = gs."gameId"
+        JOIN "Franchise" franchise ON franchise."id" = gf."franchiseId"
+      `;
+    case "perspective":
+      return Prisma.sql`
+        SELECT gs.score, perspective."id" AS key, perspective."name" AS label
+        FROM game_scores gs
+        JOIN "GamePlayerPerspective" gpp ON gpp."gameId" = gs."gameId"
+        JOIN "PlayerPerspective" perspective ON perspective."id" = gpp."playerPerspectiveId"
+      `;
   }
-  const sum = values.reduce((a, b) => a + b, 0);
-  return {
-    count: values.length,
-    average: sum / values.length,
-    median: median(values),
-    min: Math.min(...values),
-    max: Math.max(...values),
-  };
 }
 
 export function averageMetricsByGame(
@@ -155,96 +225,54 @@ export async function getOverviewStats() {
 }
 
 export async function getGroupedMetrics(filters: AnalyticsFilters): Promise<GroupMetricRow[]> {
-  const games = await prisma.game.findMany({
-    where: {
-      releaseYear: {
-        gte: filters.yearFrom,
-        lte: filters.yearTo,
-      },
-      ...(filters.genreIds?.length
-        ? { genres: { some: { genreId: { in: filters.genreIds } } } }
-        : {}),
-      ...(filters.platformIds?.length
-        ? { platforms: { some: { platformId: { in: filters.platformIds } } } }
-        : {}),
-    },
-    include: {
-      metrics: { include: { source: true } },
-      genres: { include: { genre: true } },
-      platforms: { include: { platform: true } },
-      companies: { include: { company: true } },
-      franchises: { include: { franchise: true } },
-      perspectives: { include: { playerPerspective: true } },
-    },
-    take: 5000,
-  });
-
-  const gameAverages = averageMetricsByGame(
-    games.flatMap((g) => g.metrics.map((m) => ({ ...m, gameId: g.id }))),
-    filters.metric,
-  );
-
-  const buckets = new Map<string, { label: string; values: number[] }>();
-
-  for (const game of games) {
-    const value = gameAverages.get(game.id);
-    if (value == null) continue;
-
-    const keys: Array<{ key: string; label: string }> = [];
-
-    switch (filters.groupBy) {
-      case "releaseYear":
-        if (game.releaseYear) keys.push({ key: String(game.releaseYear), label: String(game.releaseYear) });
-        break;
-      case "genre":
-        for (const g of game.genres) {
-          keys.push({ key: g.genreId, label: g.genre.name });
-        }
-        break;
-      case "platform":
-        for (const p of game.platforms) {
-          keys.push({ key: p.platformId, label: p.platform.name });
-        }
-        break;
-      case "developer":
-        for (const c of game.companies.filter((x) => x.role === "DEVELOPER")) {
-          keys.push({ key: c.companyId, label: c.company.name });
-        }
-        break;
-      case "publisher":
-        for (const c of game.companies.filter((x) => x.role === "PUBLISHER")) {
-          keys.push({ key: c.companyId, label: c.company.name });
-        }
-        break;
-      case "franchise":
-        for (const f of game.franchises) {
-          keys.push({ key: f.franchiseId, label: f.franchise.name });
-        }
-        break;
-      case "perspective":
-        for (const p of game.perspectives) {
-          keys.push({ key: p.playerPerspectiveId, label: p.playerPerspective.name });
-        }
-        break;
-    }
-
-    for (const { key, label } of keys) {
-      const bucket = buckets.get(key) ?? { label, values: [] };
-      bucket.values.push(value);
-      buckets.set(key, bucket);
-    }
-  }
-
-  const rows = [...buckets.entries()]
-    .map(([key, bucket]) => ({
+  const limit = filters.limit ?? 20;
+  const rows = await prisma.$queryRaw<
+    Array<{
+      key: string;
+      label: string;
+      count: number | bigint;
+      average: number;
+      median: number;
+      min: number;
+      max: number;
+    }>
+  >(Prisma.sql`
+    WITH game_scores AS (
+      SELECT
+        g."id" AS "gameId",
+        AVG((gm."value" / NULLIF(ms."maxValue", 0)) * 100) AS score
+      FROM "Game" g
+      JOIN "GameMetric" gm ON gm."gameId" = g."id"
+      JOIN "MetricSource" ms ON ms."id" = gm."sourceId"
+      WHERE ${metricPredicate(filters.metric)}
+        AND ${gameFilterPredicate(filters)}
+      GROUP BY g."id"
+    ),
+    dimension_scores AS (${groupedDimensionQuery(filters.groupBy)})
+    SELECT
       key,
-      label: bucket.label,
-      ...aggregateValues(bucket.values),
-    }))
-    .filter((row) => row.count >= 3)
-    .sort((a, b) => b.average - a.average);
+      label,
+      COUNT(*)::int AS count,
+      AVG(score)::float AS average,
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY score)::float AS median,
+      MIN(score)::float AS min,
+      MAX(score)::float AS max
+    FROM dimension_scores
+    GROUP BY key, label
+    HAVING COUNT(*) >= 3
+    ORDER BY average DESC
+    LIMIT ${limit}
+  `);
 
-  return rows.slice(0, filters.limit ?? 20);
+  return rows.map((row) => ({
+    key: row.key,
+    label: row.label,
+    count: Number(row.count),
+    average: row.average,
+    median: row.median,
+    min: row.min,
+    max: row.max,
+  }));
 }
 
 export async function getReleaseYearTrend(filters: AnalyticsFilters): Promise<TrendRow[]> {
@@ -346,25 +374,23 @@ export async function getFilterOptions() {
 }
 
 export async function getScoreDistribution(filters: AnalyticsFilters): Promise<Array<{ bucket: string; count: number }>> {
-  const metrics = await prisma.gameMetric.findMany({
-    where: {
-      ...buildMetricWhere(filters.metric),
-      game: {
-        releaseYear: { gte: filters.yearFrom, lte: filters.yearTo },
-      },
-    },
-    select: { value: true },
-    take: 10000,
-  });
+  const rows = await prisma.$queryRaw<Array<{ bucket: number; count: number | bigint }>>(Prisma.sql`
+    WITH metric_values AS (
+      SELECT LEAST(90, FLOOR(((gm."value" / NULLIF(ms."maxValue", 0)) * 100) / 10) * 10)::int AS bucket
+      FROM "Game" g
+      JOIN "GameMetric" gm ON gm."gameId" = g."id"
+      JOIN "MetricSource" ms ON ms."id" = gm."sourceId"
+      WHERE ${metricPredicate(filters.metric)}
+        AND ${gameFilterPredicate(filters)}
+    )
+    SELECT bucket, COUNT(*)::int AS count
+    FROM metric_values
+    GROUP BY bucket
+    ORDER BY bucket ASC
+  `);
 
-  const buckets = new Map<string, number>();
-  for (const { value } of metrics) {
-    const bucketStart = Math.floor(value / 10) * 10;
-    const label = `${bucketStart}-${bucketStart + 9}`;
-    buckets.set(label, (buckets.get(label) ?? 0) + 1);
-  }
-
-  return [...buckets.entries()]
-    .map(([bucket, count]) => ({ bucket, count }))
-    .sort((a, b) => a.bucket.localeCompare(b.bucket, undefined, { numeric: true }));
+  return rows.map((row) => ({
+    bucket: `${row.bucket}-${row.bucket + 9}`,
+    count: Number(row.count),
+  }));
 }

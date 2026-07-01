@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import {
   CorrelationScatter,
   DistributionChart,
@@ -6,8 +7,10 @@ import {
   TrendChart,
 } from "@/components/charts/analytics-charts";
 import { AnalyticsFilters } from "@/components/filters/analytics-filters";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { emptyChartHint, resolveMetricParam } from "@/lib/metrics/filters";
-import type { GroupByDimension } from "@/lib/metrics/aggregation";
+import type { AnalyticsFilters as AnalyticsFilterShape, GroupByDimension, MetricFilter } from "@/lib/metrics/aggregation";
 import {
   getCriticVsUserCorrelation,
   getFilterOptions,
@@ -17,6 +20,11 @@ import {
 } from "@/lib/metrics/aggregation";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Explore",
+  description: "Filter and compare game rating metrics by metadata dimensions.",
+};
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -45,13 +53,6 @@ export default async function ExplorePage({
 
   const filters = { metric, groupBy, yearFrom, yearTo, genreIds, platformIds, limit: 15 };
 
-  const [grouped, trend, distribution, correlation] = await Promise.all([
-    getGroupedMetrics(filters),
-    getReleaseYearTrend({ ...filters, groupBy: "releaseYear" }),
-    getScoreDistribution(filters),
-    getCriticVsUserCorrelation(400),
-  ]);
-
   return (
     <div className="space-y-8">
       <section className="space-y-2">
@@ -67,32 +68,24 @@ export default async function ExplorePage({
 
       <section className="grid gap-6 lg:grid-cols-2">
         <ChartPanel title="Grouped averages">
-          {grouped.length > 0 ? (
-            <GroupComparisonChart data={grouped} />
-          ) : (
-            <EmptyState message={emptyChartHint(metric, "metric")} />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <GroupedPanel filters={filters} metric={metric} />
+          </Suspense>
         </ChartPanel>
         <ChartPanel title="Score distribution">
-          {distribution.length > 0 ? (
-            <DistributionChart data={distribution} />
-          ) : (
-            <EmptyState message={emptyChartHint(metric, "metric")} />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <DistributionPanel filters={filters} metric={metric} />
+          </Suspense>
         </ChartPanel>
         <ChartPanel title="Trend by release year">
-          {trend.length > 0 ? (
-            <TrendChart data={trend} />
-          ) : (
-            <EmptyState message={emptyChartHint(metric, "metric")} />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <TrendPanel filters={filters} metric={metric} />
+          </Suspense>
         </ChartPanel>
         <ChartPanel title="Critic vs user">
-          {correlation.length > 0 ? (
-            <CorrelationScatter data={correlation} />
-          ) : (
-            <EmptyState message={emptyChartHint(metric, "correlation")} />
-          )}
+          <Suspense fallback={<ChartSkeleton />}>
+            <CorrelationPanel metric={metric} />
+          </Suspense>
         </ChartPanel>
       </section>
     </div>
@@ -101,17 +94,69 @@ export default async function ExplorePage({
 
 function ChartPanel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-card-border bg-card/50 p-5">
-      <h2 className="mb-4 text-lg font-medium">{title}</h2>
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
       {children}
-    </div>
+    </Card>
   );
 }
 
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="flex h-[280px] items-center justify-center rounded-xl border border-dashed border-card-border p-6 text-center text-sm text-muted">
-      {message}
-    </div>
+function ChartSkeleton() {
+  return <div className="h-[280px] animate-pulse rounded-xl bg-background/70" />;
+}
+
+async function GroupedPanel({
+  filters,
+  metric,
+}: {
+  filters: AnalyticsFilterShape;
+  metric: MetricFilter;
+}) {
+  const grouped = await getGroupedMetrics(filters);
+  return grouped.length > 0 ? (
+    <GroupComparisonChart data={grouped} description="Grouped average scores." />
+  ) : (
+    <EmptyState message={emptyChartHint(metric, "metric")} />
+  );
+}
+
+async function DistributionPanel({
+  filters,
+  metric,
+}: {
+  filters: AnalyticsFilterShape;
+  metric: MetricFilter;
+}) {
+  const distribution = await getScoreDistribution(filters);
+  return distribution.length > 0 ? (
+    <DistributionChart data={distribution} description="Filtered score distribution." />
+  ) : (
+    <EmptyState message={emptyChartHint(metric, "metric")} />
+  );
+}
+
+async function TrendPanel({
+  filters,
+  metric,
+}: {
+  filters: AnalyticsFilterShape;
+  metric: MetricFilter;
+}) {
+  const trend = await getReleaseYearTrend({ ...filters, groupBy: "releaseYear" });
+  return trend.length > 0 ? (
+    <TrendChart data={trend} description="Filtered release year trend." />
+  ) : (
+    <EmptyState message={emptyChartHint(metric, "metric")} />
+  );
+}
+
+async function CorrelationPanel({ metric }: { metric: MetricFilter }) {
+  const correlation = await getCriticVsUserCorrelation(400);
+  return correlation.length > 0 ? (
+    <CorrelationScatter data={correlation} description="Critic and user score correlation." />
+  ) : (
+    <EmptyState message={emptyChartHint(metric, "correlation")} />
   );
 }

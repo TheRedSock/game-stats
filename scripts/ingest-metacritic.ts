@@ -1,6 +1,9 @@
 #!/usr/bin/env tsx
 import "dotenv/config";
+import { resolveDatabaseEnv } from "@/lib/env/database";
 import { runMetacriticScrapeBatch } from "@/lib/metacritic/scraper";
+
+resolveDatabaseEnv();
 
 async function main() {
   const retry = process.argv.includes("--retry");

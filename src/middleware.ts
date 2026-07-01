@@ -7,7 +7,7 @@ const COOKIE_NAME = "game-stats-admin-session";
 async function isAuthed(request: NextRequest): Promise<boolean> {
   const token = request.cookies.get(COOKIE_NAME)?.value;
   if (!token) return false;
-  const secret = process.env.SESSION_SECRET ?? process.env.ADMIN_PASSWORD;
+  const secret = process.env.SESSION_SECRET;
   if (!secret) return false;
   try {
     await jwtVerify(token, new TextEncoder().encode(secret));
